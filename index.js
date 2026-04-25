@@ -14,6 +14,9 @@ http.createServer((req, res) => {
 const NUM_BOTS = 1;
 const bots = [];
 
+console.log('--- TOKEN VALIDATION TEST ---');
+require('./test-token.js');
+
 function startBot(index) {
   console.log(`Starting Bot ${index + 1}...`);
 
