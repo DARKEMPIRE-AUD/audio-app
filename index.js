@@ -40,7 +40,7 @@ for (let i = 0; i < NUM_BOTS; i++) {
   }
   tokensFound++;
 
-  console.log(`[DEBUG] Bot ${i + 1} found token, attempting login...`);
+  console.log(`[DEBUG] Bot ${i + 1} found token (Length: ${token.length}), attempting login...`);
 
   const audioFile = path.join(__dirname, `new${i + 1}.mp3`);
   
@@ -53,11 +53,18 @@ for (let i = 0; i < NUM_BOTS; i++) {
     ]
   });
 
+  // Internal debug logs to see connection progress
+  client.on('debug', info => {
+    if (info.includes('Ready') || info.includes('Connect') || info.includes('Identify')) {
+      console.log(`[JS-DEBUG] Bot ${i + 1}: ${info}`);
+    }
+  });
+
   let voiceConnection = null;
   let audioPlayer = null;
 
   client.on('ready', () => {
-    console.log(`Bot ${i + 1} (${client.user.tag}) is ready!`);
+    console.log(`[SUCCESS] Bot ${i + 1} (${client.user.tag}) is ready!`);
   });
 
   client.on('messageCreate', async (message) => {
@@ -101,9 +108,11 @@ for (let i = 0; i < NUM_BOTS; i++) {
     }
   });
 
-  client.on('error', (err) => console.error(`Bot ${i + 1} Error:`, err));
+  client.on('error', (err) => console.error(`[ERROR] Bot ${i + 1} Error:`, err));
 
-  client.login(token).catch(err => console.error(`Bot ${i + 1} Login Failed:`, err));
+  client.login(token).catch(err => {
+    console.error(`[FATAL] Bot ${i + 1} Login Failed:`, err.message);
+  });
   clients.push(client);
 }
 
