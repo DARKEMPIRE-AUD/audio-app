@@ -28,16 +28,18 @@ const client = new Client({
   ]
 });
 
-// Gateway Debug Logs
+// Gateway Debug Logs (Unfiltered)
 client.on('debug', info => {
-  if (info.includes('Identify') || info.includes('Connect') || info.includes('Ready') || info.includes('Heartbeat')) {
-    console.log(`[GATEWAY-DEBUG] Bot ${botIndex + 1}: ${info.substring(0, 100)}`);
-  }
+  console.log(`[GATEWAY-DEBUG] Bot ${botIndex + 1}: ${info}`);
 });
 
 client.on('ready', () => {
   console.log(`[SUCCESS] Bot ${botIndex + 1} (${client.user.tag}) is ready!`);
 });
+
+client.on('shardReady', (id) => console.log(`[SHARD] Bot ${botIndex + 1} Shard ${id} Ready!`));
+client.on('shardDisconnect', (event, id) => console.log(`[SHARD] Bot ${botIndex + 1} Shard ${id} Disconnected!`));
+
 
 
 client.on('messageCreate', async (message) => {
@@ -71,11 +73,11 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-console.log(`[DEBUG-CHILD] Bot ${botIndex + 1} waiting ${botIndex * 5.5} seconds to avoid Discord rate limit...`);
+console.log(`[DEBUG-CHILD] Bot ${botIndex + 1} waiting ${botIndex * 15} seconds to avoid Discord rate limit...`);
 
 setTimeout(() => {
   console.log(`[DEBUG-CHILD] Bot ${botIndex + 1} calling client.login()...`);
   client.login(token).catch(err => {
     console.error(`[FATAL] Bot ${botIndex + 1} Login Failed:`, err.message);
   });
-}, botIndex * 5500);
+}, botIndex * 15000);
