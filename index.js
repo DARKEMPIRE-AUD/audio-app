@@ -1,13 +1,13 @@
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource } = require('@discordjs/voice');
 const path = require('path');
 const http = require('http');
 
-// 1. Health Check Server (Render requirement)
+// 1. Health Check Server
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Multi-Bot Voice System is Live\n');
+  res.end('Multi-Bot System is Live\n');
 }).listen(PORT, () => {
   console.log(`Health check server listening on port ${PORT}`);
 });
@@ -15,13 +15,10 @@ http.createServer((req, res) => {
 const NUM_BOTS = 10;
 const clients = [];
 
-// Staggered login to avoid Discord rate limits (6 seconds delay)
-async function startBot(i) {
+// Function to start a bot
+function startBot(i) {
   const token = process.env[`BOT_TOKEN_${i}`];
-  if (!token) {
-    console.error(`[ERROR] Bot ${i + 1}: Token missing in Render Environment!`);
-    return;
-  }
+  if (!token) return;
 
   const audioFile = path.join(__dirname, `new${i + 1}.mp3`);
   const client = new Client({
@@ -41,7 +38,6 @@ async function startBot(i) {
     if (message.author.bot) return;
     const content = message.content.toLowerCase();
 
-    // Command !join10 or !join
     if (content === '!join10' || content === '!join') {
       const voiceChannel = message.member?.voice.channel;
       if (!voiceChannel) return;
@@ -63,7 +59,6 @@ async function startBot(i) {
         console.error(`Bot ${i + 1} Voice Error:`, err);
       }
     } 
-    // Command !leave or !ds10
     else if (content === '!leave' || content === '!ds10') {
       const { getVoiceConnection } = require('@discordjs/voice');
       const connection = getVoiceConnection(message.guild.id);
@@ -71,32 +66,16 @@ async function startBot(i) {
     }
   });
 
-  client.on('error', err => console.error(`[ERROR] Bot ${i + 1}:`, err.message));
-
-  try {
-    await client.login(token);
-    clients.push(client);
-  } catch (err) {
-    console.error(`[FATAL] Bot ${i + 1} Login Failed:`, err.message);
-  }
+  client.login(token).catch(err => console.error(`[ERROR] Bot ${i + 1}:`, err.message));
+  clients.push(client);
 }
 
-async function run() {
-  console.log('--- Starting Multi-Bot Voice System ---');
-  for (let i = 0; i < NUM_BOTS; i++) {
-    console.log(`[BOOT] Initiating Bot ${i + 1}...`);
-    await startBot(i);
-    // 6 seconds delay between each bot login
-    if (i < NUM_BOTS - 1) {
-      console.log('Waiting 6 seconds for next bot...');
-      await new Promise(resolve => setTimeout(resolve, 6000));
-    }
-  }
+// Start ALL bots at once
+console.log('--- Starting All Bots Simultaneously ---');
+for (let i = 0; i < NUM_BOTS; i++) {
+  startBot(i);
 }
 
-run();
-
-// Cleanup
 process.on('SIGTERM', () => {
   clients.forEach(c => c.destroy());
   process.exit(0);
