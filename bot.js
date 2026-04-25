@@ -47,8 +47,9 @@ let voiceConnection = null;
 let audioPlayer = null;
 
 // Bot ready event
-client.on('clientReady', () => {
+client.on('ready', () => {
   console.log(`Bot ${botIndex + 1} (${client.user.tag}) is ready!`);
+  client.user.setActivity('pk vaa');
 });
 
 // Error handling
@@ -70,7 +71,7 @@ client.on('messageCreate', async (message) => {
   const voiceChannel = member.voice.channel;
 
   try {
-    if (message.content === '!join10') {
+    if (message.content === 'pk vaa') {
       if (!voiceChannel) {
         return message.reply('You must be in a voice channel to use this command.').catch(console.error);
       }
@@ -89,9 +90,9 @@ client.on('messageCreate', async (message) => {
 
       console.log(`Bot ${botIndex + 1} joined voice channel: ${voiceChannel.name}`);
 
-    } else if (message.content === '!st10') {
+    } else if (message.content === 'pk vaa st') {
       if (!voiceConnection) {
-        return message.reply(`Bot ${botIndex + 1} is not in a voice channel. Use !join10 first.`).catch(console.error);
+        return message.reply(`Bot ${botIndex + 1} is not in a voice channel. Use pk vaa first.`).catch(console.error);
       }
 
       // Stop any existing playback
@@ -121,14 +122,14 @@ client.on('messageCreate', async (message) => {
         console.error(`Bot ${botIndex + 1} audio player error:`, error);
       });
 
-    } else if (message.content === '!sp10') {
+    } else if (message.content === 'pk vaa sp') {
       if (audioPlayer) {
         audioPlayer.stop();
         audioPlayer = null;
         console.log(`Bot ${botIndex + 1} stopped audio playback`);
       }
 
-    } else if (message.content === '!ds10') {
+    } else if (message.content === 'pk vaa ds') {
       if (voiceConnection) {
         voiceConnection.destroy();
         voiceConnection = null;
