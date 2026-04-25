@@ -3,7 +3,7 @@ const path = require('path');
 const http = require('http');
 
 // Simple health check server for hosting platforms (Koyeb, Render, etc.)
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 10000;
 const appUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
 http.createServer((req, res) => {
