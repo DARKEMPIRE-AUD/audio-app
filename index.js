@@ -1,82 +1,38 @@
-const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource } = require('@discordjs/voice');
+const { fork } = require('child_process');
 const path = require('path');
 const http = require('http');
 
-// 1. Health Check Server
+// Simple health check server
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Multi-Bot System is Live\n');
+  res.end('Bot is running\n');
 }).listen(PORT, () => {
   console.log(`Health check server listening on port ${PORT}`);
 });
 
 const NUM_BOTS = 10;
-const clients = [];
+const bots = [];
 
-// Function to start a bot
-function startBot(i) {
-  const token = process.env[`BOT_TOKEN_${i}`];
-  if (!token) return;
+function startBot(index) {
+  console.log(`Starting Bot ${index + 1}...`);
 
-  const audioFile = path.join(__dirname, `new${i + 1}.mp3`);
-  const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildVoiceStates
-    ]
+  const botProcess = fork(path.join(__dirname, 'bot.js'), [index.toString()], {
+    stdio: 'inherit',
+    env: { ...process.env, BOT_INDEX: index }
   });
 
-  client.on('ready', () => {
-    console.log(`[READY] Bot ${i + 1} (${client.user.tag}) is online!`);
-  });
-
-  client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    const content = message.content.toLowerCase();
-
-    if (content === '!join10' || content === '!join') {
-      const voiceChannel = message.member?.voice.channel;
-      if (!voiceChannel) return;
-
-      try {
-        const connection = joinVoiceChannel({
-          channelId: voiceChannel.id,
-          guildId: message.guild.id,
-          adapterCreator: message.guild.voiceAdapterCreator,
-        });
-
-        const player = createAudioPlayer();
-        const resource = createAudioResource(audioFile);
-        connection.subscribe(player);
-        player.play(resource);
-
-        console.log(`Bot ${i + 1} joined and playing ${path.basename(audioFile)}`);
-      } catch (err) {
-        console.error(`Bot ${i + 1} Voice Error:`, err);
-      }
-    } 
-    else if (content === '!leave' || content === '!ds10') {
-      const { getVoiceConnection } = require('@discordjs/voice');
-      const connection = getVoiceConnection(message.guild.id);
-      if (connection) connection.destroy();
+  botProcess.on('exit', (code, signal) => {
+    console.log(`Bot ${index + 1} exited. Code: ${code}`);
+    if (code !== 0) {
+      setTimeout(() => startBot(index), 5000);
     }
   });
 
-  client.login(token).catch(err => console.error(`[ERROR] Bot ${i + 1}:`, err.message));
-  clients.push(client);
+  bots[index] = botProcess;
 }
 
-// Start ALL bots at once
-console.log('--- Starting All Bots Simultaneously ---');
+console.log('Starting Discord Multi-Bot Voice System (Original Multi-Process Mode)...');
 for (let i = 0; i < NUM_BOTS; i++) {
   startBot(i);
 }
-
-process.on('SIGTERM', () => {
-  clients.forEach(c => c.destroy());
-  process.exit(0);
-});
