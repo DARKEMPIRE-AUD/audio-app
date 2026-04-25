@@ -81,10 +81,10 @@ npm run delete
 
 All commands must be sent in a text channel where the bots have access:
 
-- `pk vaa` - All bots join your current voice channel
-- `pk vaa st` - All bots start playing their assigned audio file simultaneously
-- `pk vaa sp` - All bots stop audio playback
-- `pk vaa ds` - All bots disconnect from voice channels
+- `!join10` - All bots join your current voice channel
+- `!st10` - All bots start playing their assigned audio file simultaneously
+- `!sp10` - All bots stop audio playback
+- `!ds10` - All bots disconnect from voice channels
 
 ## Architecture
 
