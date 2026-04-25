@@ -12,107 +12,94 @@ http.createServer((req, res) => {
   res.end('Multi-Bot System is running\n');
 }).listen(PORT, () => {
   console.log(`Health check server listening on port ${PORT}`);
-  
-  // Keep-alive ping
-  setInterval(() => {
-    const protocol = appUrl.startsWith('https') ? require('https') : require('http');
-    protocol.get(appUrl, (res) => {
-      // console.log('Self-ping successful');
-    }).on('error', (err) => {
-      console.error('Self-ping failed:', err.message);
-    });
-  }, 10 * 60 * 1000); // 10 minutes
 });
 
 // Number of bots
 const NUM_BOTS = 10;
 const clients = [];
 
-// Helper function for delay
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function startBot(i) {
+  const token = process.env[`BOT_TOKEN_${i}`];
+  if (!token) {
+    console.error(`[ERROR] Token for Bot ${i + 1} (BOT_TOKEN_${i}) missing!`);
+    return;
+  }
 
-async function startBots() {
-  console.log('Starting Discord Multi-Bot Voice System (Single Process Mode)...');
+  console.log(`[DEBUG] Bot ${i + 1} starting login process...`);
 
-  for (let i = 0; i < NUM_BOTS; i++) {
-    const token = process.env[`BOT_TOKEN_${i}`];
-    if (!token) {
-      console.error(`[ERROR] Token for Bot ${i + 1} (BOT_TOKEN_${i}) missing!`);
-      continue;
-    }
+  const audioFile = path.join(__dirname, `new${i + 1}.mp3`);
+  
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildVoiceStates
+    ]
+  });
 
-    console.log(`[DEBUG] Bot ${i + 1} preparing login...`);
-
-    const audioFile = path.join(__dirname, `new${i + 1}.mp3`);
-    
-    const client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildVoiceStates
-      ]
-    });
-
-    // Detailed debug logs
-    client.on('debug', info => {
+  client.on('debug', info => {
+    // Log important connection info
+    if (info.includes('Identify') || info.includes('Connect') || info.includes('Ready') || info.includes('Heartbeat')) {
       console.log(`[JS-DEBUG] Bot ${i + 1}: ${info.substring(0, 100)}`);
-    });
+    }
+  });
 
-    client.on('ready', () => {
-      console.log(`[SUCCESS] Bot ${i + 1} (${client.user.tag}) is ready!`);
-    });
+  client.on('ready', () => {
+    console.log(`[SUCCESS] Bot ${i + 1} (${client.user.tag}) is ready!`);
+  });
 
-    client.on('messageCreate', async (message) => {
-      if (message.author.bot) return;
-      const content = message.content.toLowerCase();
+  client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    const content = message.content.toLowerCase();
 
-      if (content === '!join10' || content === '!join') {
-        const voiceChannel = message.member?.voice.channel;
-        if (!voiceChannel) return; // Silent return if user not in VC
+    if (content === '!join10' || content === '!join') {
+      const voiceChannel = message.member?.voice.channel;
+      if (!voiceChannel) return;
 
-        try {
-          const voiceConnection = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: message.guild.id,
-            adapterCreator: message.guild.voiceAdapterCreator,
-          });
-          
-          // Play audio automatically if start command or join10
-          const audioPlayer = createAudioPlayer();
-          const resource = createAudioResource(audioFile);
-          voiceConnection.subscribe(audioPlayer);
-          audioPlayer.play(resource);
-          
-          console.log(`Bot ${i + 1} joined and playing ${path.basename(audioFile)}`);
-        } catch (err) {
-          console.error(`Bot ${i + 1} Voice Error:`, err);
-        }
-      } else if (content === '!ds10' || content === '!leave') {
-        const { getVoiceConnection } = require('@discordjs/voice');
-        const connection = getVoiceConnection(message.guild.id);
-        if (connection) connection.destroy();
+      try {
+        const voiceConnection = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: message.guild.id,
+          adapterCreator: message.guild.voiceAdapterCreator,
+        });
+        
+        const audioPlayer = createAudioPlayer();
+        const resource = createAudioResource(audioFile);
+        voiceConnection.subscribe(audioPlayer);
+        audioPlayer.play(resource);
+        
+        console.log(`Bot ${i + 1} playing ${path.basename(audioFile)}`);
+      } catch (err) {
+        console.error(`Bot ${i + 1} Voice Error:`, err);
       }
-    });
-
-    client.on('error', (err) => console.error(`[ERROR] Bot ${i + 1}:`, err));
-
-    // LOGIN with 5 second delay to avoid Discord rate limits
-    if (i > 0) {
-      console.log(`Waiting 6 seconds before Bot ${i + 1} login...`);
-      await delay(6000); 
+    } else if (content === '!ds10' || content === '!leave') {
+      const { getVoiceConnection } = require('@discordjs/voice');
+      const connection = getVoiceConnection(message.guild.id);
+      if (connection) connection.destroy();
     }
+  });
 
-    try {
-      await client.login(token);
-      clients.push(client);
-    } catch (err) {
-      console.error(`[FATAL] Bot ${i + 1} Login Failed:`, err.message);
-    }
+  client.on('error', (err) => console.error(`[ERROR] Bot ${i + 1}:`, err.message));
+
+  try {
+    await client.login(token);
+    clients.push(client);
+  } catch (err) {
+    console.error(`[FATAL] Bot ${i + 1} Login Failed:`, err.message);
   }
 }
 
-startBots();
+async function main() {
+  console.log('Starting Discord Multi-Bot Voice System (Asynchronous Mode)...');
+  for (let i = 0; i < NUM_BOTS; i++) {
+    // Start each bot with a 7 second delay but don't AWAIT the entire login
+    // This prevents one bot from blocking the others
+    setTimeout(() => startBot(i), i * 7000);
+  }
+}
+
+main();
 
 process.on('SIGINT', () => {
   clients.forEach(c => c.destroy());
