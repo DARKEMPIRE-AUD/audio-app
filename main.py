@@ -86,13 +86,22 @@ async def start_bots():
         token = os.getenv(f"BOT_TOKEN_{i}")
         if token:
             bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
-            tasks.append(bot.start(token))
+            
+            # Create a wrapper coroutine to catch exceptions for individual bots
+            async def run_bot(b, t, index):
+                try:
+                    await b.start(t)
+                except Exception as e:
+                    print(f"Bot {index + 1} failed to start: {e}")
+                    
+            tasks.append(run_bot(bot, token, i))
             bots.append(bot)
             print(f"Initialized Bot {i + 1}")
         else:
             print(f"Token for Bot {i} not found")
 
     if tasks:
+        print("Starting all bots...")
         await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
