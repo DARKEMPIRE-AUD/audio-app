@@ -102,7 +102,7 @@ async def start_bots():
             bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
             
             async def run_bot(b, t, index):
-                retries = 10
+                retries = 100
                 for attempt in range(retries):
                     try:
                         # Wait 10 seconds between each bot login to prevent Discord IP ban
