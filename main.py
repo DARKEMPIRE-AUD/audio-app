@@ -102,14 +102,24 @@ async def start_bots():
             bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
             
             async def run_bot(b, t, index):
-                try:
-                    # Wait 6 seconds between each bot login to prevent Discord IP ban (Cloudflare Error 1015)
-                    if index > 0:
-                        log_to_file(f"Bot {index + 1} waiting {index * 6} seconds before login...")
-                    await asyncio.sleep(index * 6)
-                    await b.start(t)
-                except Exception as e:
-                    log_to_file(f"Bot {index + 1} failed to start: {e}")
+                retries = 10
+                for attempt in range(retries):
+                    try:
+                        # Wait 10 seconds between each bot login to prevent Discord IP ban
+                        if index > 0 and attempt == 0:
+                            log_to_file(f"Bot {index + 1} waiting {index * 10} seconds before login...")
+                            await asyncio.sleep(index * 10)
+                        
+                        await b.start(t)
+                        break
+                    except Exception as e:
+                        if "429" in str(e) or "1015" in str(e):
+                            wait_time = 60 # Wait 1 minute before retrying
+                            log_to_file(f"Bot {index + 1} got Discord IP Ban (1015). Retrying in {wait_time}s... (Attempt {attempt + 1}/{retries})")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            log_to_file(f"Bot {index + 1} failed to start: {e}")
+                            break
                     
             tasks.append(run_bot(bot, token, i))
             bots.append(bot)
