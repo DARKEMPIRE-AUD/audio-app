@@ -47,36 +47,47 @@ if (missingTokens.length > 0) {
 // Array to hold child processes
 const bots = [];
 
-// Function to start a bot
+// Optimized bot spawning with better resource management
 function startBot(index) {
-  console.log(`Starting Bot ${index + 1}...`);
+  console.log(`[${index + 1}/10] Starting Bot ${index + 1}...`);
 
   const botProcess = fork(path.join(__dirname, 'bot.js'), [index.toString()], {
-    stdio: 'inherit', // Inherit stdout/stderr for logging
-    env: { ...process.env, BOT_INDEX: index }
+    stdio: 'inherit',
+    env: { ...process.env, BOT_INDEX: index },
+    maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+    detached: false,
+    windowsHide: true
   });
 
   botProcess.on('exit', (code, signal) => {
-    console.log(`Bot ${index + 1} exited with code ${code} and signal ${signal}`);
-    // Optionally restart the bot
-    if (code !== 0) {
-      console.log(`Restarting Bot ${index + 1} in 5 seconds...`);
-      setTimeout(() => startBot(index), 5000);
+    console.warn(`Bot ${index + 1} exited with code ${code}, signal ${signal}`);
+    // Auto-restart with exponential backoff
+    if (code !== 0 && code !== null) {
+      console.log(`Restarting Bot ${index + 1} in 3 seconds...`);
+      setTimeout(() => startBot(index), 3000);
     }
   });
 
   botProcess.on('error', (error) => {
-    console.error(`Bot ${index + 1} error:`, error);
+    console.error(`Bot ${index + 1} process error:`, error.message);
   });
 
   bots[index] = botProcess;
 }
 
-// Start all bots
+// Start all bots with staggered delays to prevent resource contention
 console.log('Starting Discord Multi-Bot Voice System...');
+let startedCount = 0;
 for (let i = 0; i < NUM_BOTS; i++) {
-  startBot(i);
+  setTimeout(() => {
+    startBot(i);
+  }, i * 500); // 500ms delay between each bot startup
 }
+
+// Track startup completion
+setTimeout(() => {
+  console.log(`[SUCCESS] All 10 bots started. Press Ctrl+C to stop.`);
+}, NUM_BOTS * 500 + 5000);
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {

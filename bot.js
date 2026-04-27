@@ -1,40 +1,40 @@
 require('dotenv').config();
-require('dotenv').config({ path: '.env.example' }); // Fallback to .env.example for quick deployment
+require('dotenv').config({ path: '.env.example' });
 const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+const { readFileSync } = require('fs');
 const path = require('path');
 
-// Bot index passed as argument (0-9)
+// Bot index and configuration
 const botIndex = parseInt(process.argv[2]) || 0;
-
-// Discord bot tokens from environment variables
 const tokens = [
-  process.env.BOT_TOKEN_0,
-  process.env.BOT_TOKEN_1,
-  process.env.BOT_TOKEN_2,
-  process.env.BOT_TOKEN_3,
-  process.env.BOT_TOKEN_4,
-  process.env.BOT_TOKEN_5,
-  process.env.BOT_TOKEN_6,
-  process.env.BOT_TOKEN_7,
-  process.env.BOT_TOKEN_8,
+  process.env.BOT_TOKEN_0, process.env.BOT_TOKEN_1, process.env.BOT_TOKEN_2,
+  process.env.BOT_TOKEN_3, process.env.BOT_TOKEN_4, process.env.BOT_TOKEN_5,
+  process.env.BOT_TOKEN_6, process.env.BOT_TOKEN_7, process.env.BOT_TOKEN_8,
   process.env.BOT_TOKEN_9
 ];
 
 if (botIndex < 0 || botIndex >= tokens.length) {
-  console.error(`Invalid bot index: ${botIndex}. Must be between 0 and ${tokens.length - 1}`);
+  console.error(`Invalid bot index: ${botIndex}`);
   process.exit(1);
 }
-
 if (!tokens[botIndex]) {
-  console.error(`Bot token not found for index ${botIndex}. Set BOT_TOKEN_${botIndex} in .env file`);
+  console.error(`Bot token not found for index ${botIndex}`);
   process.exit(1);
 }
 
 const token = tokens[botIndex];
 const audioFile = path.join(__dirname, `new${botIndex + 1}.mp3`);
 
-// Create Discord client
+// Pre-cache audio buffer
+let audioBuffer = null;
+try {
+  audioBuffer = readFileSync(audioFile);
+} catch (e) {
+  console.warn(`Audio file not found: ${audioFile}`);
+}
+
+// Create optimized Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -44,137 +44,189 @@ const client = new Client({
   ]
 });
 
-let voiceConnection = null;
-let audioPlayer = null;
+// Connection cache
+const connections = new Map();
+let readyFlag = false;
+let commandCooldown = new Map();
+const COOLDOWN_MS = 500; // 500ms cooldown per user
 
-// Bot ready event
+// Optimized ready event - runs only once
+let activitySet = false;
 client.on('ready', () => {
-  console.log(`Bot ${botIndex + 1} (${client.user.tag}) is ready!`);
-  client.user.setActivity('pk vaa');
+  if (!readyFlag) {
+    readyFlag = true;
+    console.log(`Bot ${botIndex + 1} (${client.user.tag}) is ready!`);
+    if (!activitySet) {
+      client.user.setActivity('pk vaa').catch(() => {});
+      activitySet = true;
+    }
+  }
 });
 
-// Error handling
+// Efficient error handling with recovery
 client.on('error', (error) => {
-  console.error(`Bot ${botIndex + 1} error:`, error);
+  console.error(`Bot ${botIndex + 1} error:`, error.message);
 });
 
-client.on('voiceStateUpdate', (oldState, newState) => {
-  // Handle voice state changes if needed
+client.on('voiceStateUpdate', () => {
+  // Optimized voice state handler
 });
 
-// Message handler
+// Ultra-fast message handler with debouncing
 client.on('messageCreate', async (message) => {
+  // Early returns for efficiency
   if (message.author.bot) return;
+  if (!message.member) return;
 
-  const member = message.member;
-  if (!member) return;
+  const userId = message.author.id;
+  const guildId = message.guild?.id;
+  
+  // Rate limiting - prevent spam
+  const cooldownKey = `${guildId}-${userId}`;
+  const now = Date.now();
+  if (commandCooldown.has(cooldownKey)) {
+    const expirationTime = commandCooldown.get(cooldownKey) + COOLDOWN_MS;
+    if (now < expirationTime) return;
+  }
+  commandCooldown.set(cooldownKey, now);
 
-  const voiceChannel = member.voice.channel;
+  const cmd = message.content;
+  const voiceChannel = message.member.voice.channel;
+  const connKey = guildId;
 
   try {
-    if (message.content === '!join10') {
+    // Command routing - optimized for speed
+    if (cmd === '!join10') {
       if (!voiceChannel) {
-        return message.reply('You must be in a voice channel to use this command.').catch(console.error);
+        return message.reply('You must be in a voice channel!').catch(() => {});
+      }
+      if (connections.has(connKey)) {
+        return message.reply(`Bot ${botIndex + 1} already in channel!`).catch(() => {});
       }
 
-      // Check if already connected
-      if (voiceConnection) {
-        return message.reply(`Bot ${botIndex + 1} is already in a voice channel.`).catch(console.error);
-      }
-
-      // Join voice channel
-      voiceConnection = joinVoiceChannel({
+      // Fast connection
+      const conn = joinVoiceChannel({
         channelId: voiceChannel.id,
-        guildId: message.guild.id,
+        guildId: guildId,
         adapterCreator: message.guild.voiceAdapterCreator,
+        selfMute: false,
+        selfDeaf: false
       });
 
-      console.log(`Bot ${botIndex + 1} joined voice channel: ${voiceChannel.name}`);
+      connections.set(connKey, { conn, player: null });
+      console.log(`Bot ${botIndex + 1} joined: ${voiceChannel.name}`);
 
-    } else if (message.content === '!st10') {
-      if (!voiceConnection) {
-        return message.reply(`Bot ${botIndex + 1} is not in a voice channel. Use !join10 first.`).catch(console.error);
+    } else if (cmd === '!st10') {
+      const connection = connections.get(connKey);
+      if (!connection) {
+        return message.reply(`Bot ${botIndex + 1} not in channel. Use !join10 first!`).catch(() => {});
       }
 
-      // Stop any existing playback
-      if (audioPlayer) {
-        audioPlayer.stop();
+      // Stop existing player
+      if (connection.player) {
+        connection.player.stop();
       }
 
-      // Create new audio player and resource
-      audioPlayer = createAudioPlayer();
-      const audioResource = createAudioResource(audioFile);
+      // Create player with audio buffer
+      const player = createAudioPlayer();
+      connection.player = player;
 
-      // Subscribe to voice connection
-      voiceConnection.subscribe(audioPlayer);
+      // Fast resource creation from buffer
+      let resource;
+      try {
+        if (audioBuffer) {
+          resource = createAudioResource(audioBuffer, { inlineVolume: true });
+        } else {
+          resource = createAudioResource(audioFile, { inlineVolume: true });
+        }
+      } catch (e) {
+        return message.reply('Audio file error!').catch(() => {});
+      }
 
-      // Play audio
-      audioPlayer.play(audioResource);
+      // Subscribe and play
+      connection.conn.subscribe(player);
+      player.play(resource);
 
-      console.log(`Bot ${botIndex + 1} started playing: ${path.basename(audioFile)}`);
+      console.log(`Bot ${botIndex + 1} playing audio`);
 
-      // Handle playback finish
-      audioPlayer.on(AudioPlayerStatus.Idle, () => {
-        console.log(`Bot ${botIndex + 1} finished playing audio`);
+      // Single listener per player - remove old listeners
+      player.removeAllListeners();
+      player.once(AudioPlayerStatus.Idle, () => {
+        console.log(`Bot ${botIndex + 1} finished`);
       });
 
-      // Handle errors
-      audioPlayer.on('error', (error) => {
-        console.error(`Bot ${botIndex + 1} audio player error:`, error);
+      player.on('error', (error) => {
+        console.error(`Bot ${botIndex + 1} player error:`, error.message);
       });
 
-    } else if (message.content === '!sp10') {
-      if (audioPlayer) {
-        audioPlayer.stop();
-        audioPlayer = null;
-        console.log(`Bot ${botIndex + 1} stopped audio playback`);
+    } else if (cmd === '!sp10') {
+      const connection = connections.get(connKey);
+      if (connection?.player) {
+        connection.player.stop();
+        console.log(`Bot ${botIndex + 1} stopped`);
       }
 
-    } else if (message.content === '!ds10') {
-      if (voiceConnection) {
-        voiceConnection.destroy();
-        voiceConnection = null;
-        console.log(`Bot ${botIndex + 1} disconnected from voice channel`);
-      }
-
-      if (audioPlayer) {
-        audioPlayer.stop();
-        audioPlayer = null;
+    } else if (cmd === '!ds10') {
+      const connection = connections.get(connKey);
+      if (connection) {
+        if (connection.player) connection.player.stop();
+        connection.conn.destroy();
+        connections.delete(connKey);
+        console.log(`Bot ${botIndex + 1} disconnected`);
       }
     }
   } catch (error) {
-    console.error(`Bot ${botIndex + 1} command error:`, error);
-    message.reply('An error occurred while processing the command.').catch(console.error);
+    console.error(`Bot ${botIndex + 1} error:`, error.message);
+    message.reply('Command error!').catch(() => {});
   }
 });
 
-// Login with token
-client.login(token).catch((error) => {
-  console.error(`Bot ${botIndex + 1} login failed:`, error);
+// Fast login with timeout
+const loginTimeout = setTimeout(() => {
+  console.error(`Bot ${botIndex + 1} login timeout!`);
+  process.exit(1);
+}, 30000); // 30 second timeout
+
+client.login(token).then(() => {
+  clearTimeout(loginTimeout);
+  console.log(`Bot ${botIndex + 1} connected!`);
+}).catch((error) => {
+  clearTimeout(loginTimeout);
+  console.error(`Bot ${botIndex + 1} login failed:`, error.message);
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log(`Shutting down Bot ${botIndex + 1}...`);
-  if (voiceConnection) {
-    voiceConnection.destroy();
+// Optimized graceful shutdown
+const shutdown = async () => {
+  console.log(`Bot ${botIndex + 1} shutting down...`);
+  
+  // Cleanup all connections
+  for (const [key, conn] of connections.entries()) {
+    try {
+      if (conn.player) conn.player.stop();
+      if (conn.conn) conn.conn.destroy();
+    } catch (e) {}
   }
-  if (audioPlayer) {
-    audioPlayer.stop();
-  }
-  client.destroy();
+  connections.clear();
+  commandCooldown.clear();
+
+  // Disconnect client
+  try {
+    await client.destroy();
+  } catch (e) {}
+
   process.exit(0);
+};
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+process.on('SIGHUP', shutdown);
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error(`Bot ${botIndex + 1} uncaught exception:`, error.message);
 });
 
-process.on('SIGTERM', () => {
-  console.log(`Shutting down Bot ${botIndex + 1}...`);
-  if (voiceConnection) {
-    voiceConnection.destroy();
-  }
-  if (audioPlayer) {
-    audioPlayer.stop();
-  }
-  client.destroy();
-  process.exit(0);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`Bot ${botIndex + 1} unhandled rejection:`, reason);
 });
