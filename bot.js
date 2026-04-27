@@ -1,7 +1,7 @@
 require('dotenv').config({ quiet: true });
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const { existsSync } = require('fs');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, StreamType } = require('@discordjs/voice');
+const { createReadStream, existsSync } = require('fs');
 const path = require('path');
 
 // Bot index and configuration
@@ -181,9 +181,13 @@ client.on('messageCreate', async (message) => {
 
         let resource;
         try {
-          resource = createAudioResource(audioFile, { inlineVolume: true });
+          resource = createAudioResource(createReadStream(audioFile), {
+            inputType: StreamType.Arbitrary,
+            inlineVolume: true
+          });
         } catch (e) {
-          return message.reply('Audio file error!').catch(() => {});
+          console.error(`Bot ${botIndex + 1} resource creation error:`, e.message);
+          return message.reply(`Audio file error: ${e.message}`).catch(() => {});
         }
 
         // Play immediately
