@@ -149,9 +149,19 @@ async def start_bots():
                     break
                 except Exception as e:
                     err = str(e)
+                    # Always close the bot cleanly before retrying
+                    try:
+                        if not b.is_closed():
+                            await b.close()
+                    except Exception:
+                        pass
+
                     if "429" in err or "1015" in err:
-                        log(f"Bot {index + 1} rate-limited. Retry in 60s (attempt {attempt + 1}/100)")
-                        await asyncio.sleep(60)
+                        wait_time = 60 * (attempt + 1)  # Exponential backoff
+                        log(f"Bot {index + 1} rate-limited. Retry in {wait_time}s (attempt {attempt + 1}/100)")
+                        await asyncio.sleep(wait_time)
+                        # Create a fresh bot instance for next attempt
+                        b = MultiBot(bot_index=index, command_prefix="!", intents=b._connection._intents)
                     else:
                         log(f"Bot {index + 1} failed: {e}")
                         break
