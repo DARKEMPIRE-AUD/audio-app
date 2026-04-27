@@ -6,17 +6,20 @@ import threading
 from flask import Flask
 from dotenv import load_dotenv
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables
 load_dotenv()
 
+# ─── Flask health-check server ───────────────────────────────────────────────
 app = Flask(__name__)
 
 LOG_FILE = "bot.log"
 
-def log_to_file(msg):
+def log(msg):
+    """Write to log file and stdout."""
     with open(LOG_FILE, "a") as f:
         f.write(msg + "\n")
     print(msg, flush=True)
@@ -25,22 +28,29 @@ def log_to_file(msg):
 def home():
     try:
         with open(LOG_FILE, "r") as f:
-            content = f.read()
-        return f"<pre>{content}</pre>"
-    except:
+            return f"<pre>{f.read()}</pre>"
+    except Exception:
         return "Log file not created yet."
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# Start Flask in a separate thread
+# Start Flask in background
 threading.Thread(target=run_flask, daemon=True).start()
 
-# Bot settings
-NUM_BOTS = 10
-bots = []
+# ─── Parse tokens ────────────────────────────────────────────────────────────
+def get_tokens():
+    """Parse TOKENS env var (comma-separated) into a list."""
+    raw = os.environ.get("TOKENS", "")
+    if not raw:
+        log("ERROR: TOKENS environment variable is missing or empty!")
+        return []
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    log(f"Found {len(tokens)} tokens")
+    return tokens
 
+# ─── Bot class ────────────────────────────────────────────────────────────────
 class MultiBot(commands.Bot):
     def __init__(self, bot_index, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,117 +59,120 @@ class MultiBot(commands.Bot):
         self.voice_client = None
 
     async def on_ready(self):
-        log_to_file(f"Bot {self.bot_index + 1} ({self.user}) is ready!")
+        log(f"Bot {self.bot_index + 1} ({self.user}) is ready!")
         await self.change_presence(activity=discord.Game(name="pk vaa"))
 
     async def on_message(self, message):
         if message.author.bot:
             return
-        
-        # All bots listen to the same commands
-        content = message.content.lower()
-        
+
+        content = message.content.lower().strip()
+
+        # ── !join10 ──
         if content == "!join10":
-            if message.author.voice:
-                channel = message.author.voice.channel
-                # Stagger voice channel joins by 2 seconds per bot to avoid Discord Voice Server block (1006/Timeout)
-                if self.bot_index > 0:
-                    await asyncio.sleep(self.bot_index * 2)
-                
-                try:
-                    self.voice_client = await channel.connect(timeout=20.0)
-                    log_to_file(f"Bot {self.bot_index + 1} joined {channel.name}")
-                except Exception as e:
-                    log_to_file(f"Bot {self.bot_index + 1} failed to join voice: {e}")
-            else:
+            if not message.author.voice:
                 await message.channel.send(f"Bot {self.bot_index + 1}: You need to be in a voice channel!")
+                return
 
+            channel = message.author.voice.channel
+
+            # Stagger joins (2s per bot) to avoid Discord voice timeout
+            if self.bot_index > 0:
+                await asyncio.sleep(self.bot_index * 2)
+
+            try:
+                self.voice_client = await channel.connect(timeout=30.0)
+                log(f"Bot {self.bot_index + 1} joined {channel.name}")
+            except Exception as e:
+                log(f"Bot {self.bot_index + 1} failed to join voice: {e}")
+
+        # ── !st10 ──
         elif content == "!st10":
-            if self.voice_client and self.voice_client.is_connected():
-                if os.path.exists(self.audio_file):
-                    if self.voice_client.is_playing():
-                        self.voice_client.stop()
-                    
-                    # Stagger playback starts by 1 second
-                    if self.bot_index > 0:
-                        await asyncio.sleep(self.bot_index * 1)
-                    
-                    try:
-                        source = discord.FFmpegPCMAudio(self.audio_file)
-                        self.voice_client.play(source)
-                        log_to_file(f"Bot {self.bot_index + 1} playing {self.audio_file}")
-                    except Exception as e:
-                        log_to_file(f"Bot {self.bot_index + 1} failed to play audio: {e}")
-                else:
-                    log_to_file(f"Bot {self.bot_index + 1}: File {self.audio_file} not found")
+            if not self.voice_client or not self.voice_client.is_connected():
+                return
 
+            if not os.path.exists(self.audio_file):
+                log(f"Bot {self.bot_index + 1}: File {self.audio_file} not found")
+                return
+
+            if self.voice_client.is_playing():
+                self.voice_client.stop()
+
+            # Stagger playback (1s per bot)
+            if self.bot_index > 0:
+                await asyncio.sleep(self.bot_index * 1)
+
+            try:
+                source = discord.FFmpegPCMAudio(self.audio_file)
+                self.voice_client.play(source)
+                log(f"Bot {self.bot_index + 1} playing {self.audio_file}")
+            except Exception as e:
+                log(f"Bot {self.bot_index + 1} failed to play: {e}")
+
+        # ── !sp10 ──
         elif content == "!sp10":
             if self.voice_client and self.voice_client.is_playing():
                 self.voice_client.stop()
-                log_to_file(f"Bot {self.bot_index + 1} stopped playback")
+                log(f"Bot {self.bot_index + 1} stopped playback")
 
+        # ── !ds10 ──
         elif content == "!ds10":
             if self.voice_client and self.voice_client.is_connected():
                 await self.voice_client.disconnect()
                 self.voice_client = None
-                log_to_file(f"Bot {self.bot_index + 1} disconnected")
+                log(f"Bot {self.bot_index + 1} disconnected")
 
+# ─── Startup ──────────────────────────────────────────────────────────────────
 async def start_bots():
+    tokens = get_tokens()
+    if not tokens:
+        log("No tokens found. Cannot start any bots.")
+        return
+
     intents = discord.Intents.default()
     intents.message_content = True
     intents.voice_states = True
-    
-    tasks = []
-    for i in range(NUM_BOTS):
-        token = os.getenv(f"BOT_TOKEN_{i}")
-        if token:
-            bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
-            
-            async def run_bot(b, t, index):
-                retries = 100
-                for attempt in range(retries):
-                    try:
-                        # Wait 10 seconds between each bot login to prevent Discord IP ban
-                        if index > 0 and attempt == 0:
-                            log_to_file(f"Bot {index + 1} waiting {index * 10} seconds before login...")
-                            await asyncio.sleep(index * 10)
-                        
-                        await b.start(t)
-                        break
-                    except Exception as e:
-                        if "429" in str(e) or "1015" in str(e):
-                            wait_time = 60 # Wait 1 minute before retrying
-                            log_to_file(f"Bot {index + 1} got Discord IP Ban (1015). Retrying in {wait_time}s... (Attempt {attempt + 1}/{retries})")
-                            await asyncio.sleep(wait_time)
-                        else:
-                            log_to_file(f"Bot {index + 1} failed to start: {e}")
-                            break
-                    
-            tasks.append(run_bot(bot, token, i))
-            bots.append(bot)
-            log_to_file(f"Initialized Bot {i + 1}")
-        else:
-            log_to_file(f"Token for Bot {i} not found")
 
-    if tasks:
-        log_to_file("Starting all bots...")
-        await asyncio.gather(*tasks)
-    else:
-        log_to_file("No tasks to run. Exiting...")
+    tasks = []
+    for i, token in enumerate(tokens):
+        bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
+
+        async def run_bot(b, t, index):
+            for attempt in range(100):
+                try:
+                    # Stagger logins (10s per bot) to avoid Discord IP ban
+                    if index > 0 and attempt == 0:
+                        log(f"Bot {index + 1} waiting {index * 10}s before login...")
+                        await asyncio.sleep(index * 10)
+
+                    await b.start(t)
+                    break
+                except Exception as e:
+                    err = str(e)
+                    if "429" in err or "1015" in err:
+                        log(f"Bot {index + 1} rate-limited. Retry in 60s (attempt {attempt + 1}/100)")
+                        await asyncio.sleep(60)
+                    else:
+                        log(f"Bot {index + 1} failed: {e}")
+                        break
+
+        tasks.append(run_bot(bot, token, i))
+        log(f"Initialized Bot {i + 1}")
+
+    log(f"Starting {len(tasks)} bots...")
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    import time
     try:
-        # Clear the log file on startup
         with open(LOG_FILE, "w") as f:
             f.write("--- Starting application ---\n")
-        log_to_file("Starting application...")
+        log("Starting application...")
         asyncio.run(start_bots())
     except KeyboardInterrupt:
-        log_to_file("Shutting down...")
+        log("Shutting down...")
     except Exception as e:
-        log_to_file(f"Fatal error: {e}")
+        log(f"Fatal error: {e}")
     finally:
-        log_to_file("Application stopped. Waiting indefinitely so you can read the logs...")
+        log("Application stopped. Keeping alive for logs...")
         while True:
             time.sleep(1)
