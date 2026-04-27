@@ -138,38 +138,24 @@ async def start_bots():
         bot = MultiBot(bot_index=i, command_prefix="!", intents=intents)
 
         async def run_bot(b, t, index):
-            for attempt in range(100):
-                try:
-                    # Stagger logins (10s per bot) to avoid Discord IP ban
-                    if index > 0 and attempt == 0:
-                        log(f"Bot {index + 1} waiting {index * 10}s before login...")
-                        await asyncio.sleep(index * 10)
-
-                    await b.start(t)
-                    break
-                except Exception as e:
-                    err = str(e)
-                    # Always close the bot cleanly before retrying
-                    try:
-                        if not b.is_closed():
-                            await b.close()
-                    except Exception:
-                        pass
-
-                    if "429" in err or "1015" in err:
-                        wait_time = 60 * (attempt + 1)  # Exponential backoff
-                        log(f"Bot {index + 1} rate-limited. Retry in {wait_time}s (attempt {attempt + 1}/100)")
-                        await asyncio.sleep(wait_time)
-                        # Create a fresh bot instance for next attempt
-                        b = MultiBot(bot_index=index, command_prefix="!", intents=b._connection._intents)
-                    else:
-                        log(f"Bot {index + 1} failed: {e}")
-                        break
+            # Stagger logins: 20s between each bot
+            if index > 0:
+                wait = index * 20
+                log(f"Bot {index + 1} waiting {wait}s before login...")
+                await asyncio.sleep(wait)
+            try:
+                log(f"Bot {index + 1} logging in...")
+                # discord.py handles 429 rate limits internally
+                await b.start(t)
+            except discord.LoginFailure:
+                log(f"Bot {index + 1} INVALID TOKEN - check your TOKENS env var!")
+            except Exception as e:
+                log(f"Bot {index + 1} error: {e}")
 
         tasks.append(run_bot(bot, token, i))
-        log(f"Initialized Bot {i + 1}")
+        log(f"Queued Bot {i + 1}")
 
-    log(f"Starting {len(tasks)} bots...")
+    log(f"Starting {len(tasks)} bots (staggered 20s apart)...")
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
