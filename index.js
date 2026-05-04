@@ -1,169 +1,145 @@
-const { fork } = require('child_process');
+require('dotenv').config();
+const { Client, GatewayIntentBits } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior } = require('@discordjs/voice');
 const path = require('path');
-const http = require('http');
-require('dotenv').config({ quiet: true });
 
-// Simple health check server for hosting platforms (Koyeb, Render, etc.)
-const PORT = process.env.PORT || 10000;
-const appUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-const TOTAL_BOTS = 10;
-const BOT_START_DELAY_MS = Number(process.env.BOT_START_DELAY_MS || (process.env.NODE_ENV === 'production' ? 5000 : 1000));
-const BASE_RESTART_DELAY_MS = Number(process.env.BOT_RESTART_DELAY_MS || 5000);
-const MAX_RESTART_DELAY_MS = Number(process.env.BOT_MAX_RESTART_DELAY_MS || 60000);
-
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running\n');
-}).listen(PORT, () => {
-  console.log(`Health check server listening on port ${PORT}`);
-  
-  // Keep-alive ping every 10 minutes
-  setInterval(() => {
-    const protocol = appUrl.startsWith('https') ? require('https') : require('http');
-    protocol.get(appUrl, (res) => {
-      console.log('Self-ping successful');
-    }).on('error', (err) => {
-      console.error('Self-ping failed:', err.message);
-    });
-  }, 10 * 60 * 1000); // 10 minutes
-});
-
-// Check if tokens are set
-console.log('Validating environment variables...');
-const allBotIndexes = Array.from({ length: TOTAL_BOTS }, (_, i) => i);
-const enabledBotIndexes = [];
-const missingTokens = [];
-for (const i of allBotIndexes) {
-  if (!process.env[`BOT_TOKEN_${i}`]) {
-    missingTokens.push(`BOT_TOKEN_${i}`);
-  } else {
-    enabledBotIndexes.push(i);
-  }
+const tokens = (process.env.TOKENS || '').split(',').map(t => t.trim()).filter(Boolean);
+if (tokens.length === 0) {
+    console.error("No tokens found in process.env.TOKENS");
+    process.exit(1);
 }
 
-if (missingTokens.length > 0) {
-  console.warn(`\n[WARNING] The following environment variables are missing: ${missingTokens.join(', ')}`);
-  console.warn('The bots associated with these tokens will be skipped.\n');
-} else {
-  console.log(`[SUCCESS] All ${TOTAL_BOTS} bot tokens are present in environment.\n`);
-}
-
-if (enabledBotIndexes.length === 0) {
-  console.error('[FATAL] No valid BOT_TOKEN_* environment variables found. Exiting.');
-  process.exit(1);
-}
-
-console.log(`[INFO] ${enabledBotIndexes.length}/${TOTAL_BOTS} bots are configured and will be started.`);
-
-// Array to hold child processes
 const bots = [];
-const restartAttempts = new Map();
-let isShuttingDown = false;
 
-// Optimized bot spawning with better resource management
-function startBot(index) {
-  if (!process.env[`BOT_TOKEN_${index}`]) {
-    return;
-  }
+// Helper function for delays
+const sleep = ms => new Promise(res => setTimeout(res, ms));
 
-  console.log(`Starting Bot ${index + 1}...`);
+async function startBots() {
+    console.log(`Initializing ${tokens.length} bots. Using staggered login...`);
 
-  const botProcess = fork(path.join(__dirname, 'bot.js'), [index.toString()], {
-    stdio: 'inherit',
-    env: { ...process.env, BOT_INDEX: index },
-    maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    detached: false,
-    windowsHide: true
-  });
+    for (let i = 0; i < tokens.length; i++) {
+        const client = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildVoiceStates,
+                GatewayIntentBits.GuildMessages,
+                GatewayIntentBits.MessageContent
+            ]
+        });
 
-  botProcess.on('exit', (code, signal) => {
-    console.warn(`Bot ${index + 1} exited with code ${code}, signal ${signal}`);
-    if (isShuttingDown) {
-      return;
+        const player = createAudioPlayer({
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play,
+            },
+        });
+
+        const botData = {
+            id: i + 1,
+            client,
+            player,
+            connection: null,
+            audioFile: path.join(__dirname, `new${i + 1}.mp3`)
+        };
+        bots.push(botData);
+
+        client.once('ready', () => {
+            console.log(`[Bot ${botData.id}] Ready! Logged in as ${client.user.tag}`);
+        });
+
+        client.on('messageCreate', async (message) => {
+            if (message.author.bot) return;
+
+            // Only the FIRST bot listens to commands so we don't trigger the same command 10 times
+            if (botData.id !== 1) return;
+
+            const command = message.content.trim().toLowerCase();
+
+            if (command === '!join10') {
+                const voiceChannel = message.member?.voice?.channel;
+                if (!voiceChannel) {
+                    return message.reply('You need to be in a voice channel first!');
+                }
+
+                message.reply(`Bots are joining <#${voiceChannel.id}> slowly to prevent rate limits...`);
+                
+                for (const bot of bots) {
+                    try {
+                        bot.connection = joinVoiceChannel({
+                            channelId: voiceChannel.id,
+                            guildId: voiceChannel.guild.id,
+                            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+                            selfDeaf: true,
+                            selfMute: false
+                        });
+
+                        bot.connection.subscribe(bot.player);
+                        console.log(`[Bot ${bot.id}] Joined voice channel.`);
+                    } catch (error) {
+                        console.error(`[Bot ${bot.id}] Failed to join:`, error);
+                    }
+                    
+                    // Staggered join (2 second delay)
+                    await sleep(2000);
+                }
+                
+                message.channel.send('✅ All bots joined successfully!');
+            }
+
+            if (command === '!st10') {
+                message.reply('Starting synchronized playback in 2 seconds...');
+                
+                // Target time is exactly 2 seconds in the future
+                const targetTime = Date.now() + 2000;
+                
+                for (const bot of bots) {
+                    // How long this specific bot needs to wait to hit the target time
+                    const timeToWait = targetTime - Date.now();
+                    
+                    // Pre-create the audio resource so there's no disk I/O delay inside the timeout
+                    try {
+                        const resource = createAudioResource(bot.audioFile);
+                        
+                        setTimeout(() => {
+                            bot.player.play(resource);
+                            console.log(`[Bot ${bot.id}] Started playing synchronized audio.`);
+                        }, Math.max(0, timeToWait));
+                    } catch (err) {
+                        console.error(`[Bot ${bot.id}] Error reading audio file:`, err);
+                    }
+                }
+            }
+
+            if (command === '!sp10') {
+                for (const bot of bots) {
+                    bot.player.stop();
+                }
+                message.reply('⏹️ Stopped all audio.');
+            }
+
+            if (command === '!ds10') {
+                for (const bot of bots) {
+                    if (bot.connection) {
+                        bot.connection.destroy();
+                        bot.connection = null;
+                    }
+                }
+                message.reply('🔌 All bots disconnected.');
+            }
+        });
+
+        // Staggered login (3 second delay between each token login)
+        try {
+            await client.login(tokens[i]);
+            // Wait 3 seconds before logging in the next bot to avoid global rate limits
+            if (i < tokens.length - 1) {
+                await sleep(3000);
+            }
+        } catch (error) {
+            console.error(`[Bot ${i + 1}] Login failed:`, error);
+        }
     }
-
-    // Auto-restart with exponential backoff
-    if (code !== 0 && code !== null) {
-      const attempt = (restartAttempts.get(index) || 0) + 1;
-      restartAttempts.set(index, attempt);
-
-      const restartDelay = Math.min(
-        MAX_RESTART_DELAY_MS,
-        BASE_RESTART_DELAY_MS * Math.pow(2, attempt - 1)
-      );
-
-      console.log(
-        `Restarting Bot ${index + 1} in ${Math.round(restartDelay / 1000)} seconds (attempt ${attempt})...`
-      );
-      setTimeout(() => startBot(index), restartDelay);
-    } else {
-      restartAttempts.delete(index);
-    }
-  });
-
-  botProcess.on('error', (error) => {
-    console.error(`Bot ${index + 1} process error:`, error.message);
-  });
-
-  bots[index] = botProcess;
+    
+    console.log("All bots initialized successfully!");
 }
 
-// Start all bots with minimal resource usage
-console.log('Starting Discord Multi-Bot Voice System (512MB total)...');
-for (let i = 0; i < enabledBotIndexes.length; i++) {
-  const botIndex = enabledBotIndexes[i];
-  // Staggered startup to reduce Discord login timeouts on low-CPU hosts
-  setTimeout(() => {
-    startBot(botIndex);
-  }, i * BOT_START_DELAY_MS);
-}
-
-// Track startup completion
-setTimeout(() => {
-  console.log(`[SUCCESS] Startup sequence triggered for ${enabledBotIndexes.length} bot(s). Press Ctrl+C to stop.`);
-}, enabledBotIndexes.length * BOT_START_DELAY_MS + 5000);
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  isShuttingDown = true;
-  console.log('\nShutting down all bots...');
-  bots.forEach((bot, index) => {
-    if (bot && !bot.killed) {
-      console.log(`Terminating Bot ${index + 1}...`);
-      bot.kill('SIGINT');
-    }
-  });
-
-  // Wait a bit for bots to shut down
-  setTimeout(() => {
-    console.log('All bots shut down. Exiting...');
-    process.exit(0);
-  }, 2000);
-});
-
-process.on('SIGTERM', () => {
-  isShuttingDown = true;
-  console.log('\nShutting down all bots...');
-  bots.forEach((bot, index) => {
-    if (bot && !bot.killed) {
-      console.log(`Terminating Bot ${index + 1}...`);
-      bot.kill('SIGTERM');
-    }
-  });
-
-  setTimeout(() => {
-    console.log('All bots shut down. Exiting...');
-    process.exit(0);
-  }, 2000);
-});
-
-// Optional: Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
+startBots();
