@@ -3,9 +3,18 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior } = require('@discordjs/voice');
 const path = require('path');
 
-const tokens = (process.env.TOKENS || '').split(',').map(t => t.trim()).filter(Boolean);
+let tokens = (process.env.TOKENS || '').split(',').map(t => t.trim()).filter(Boolean);
+
 if (tokens.length === 0) {
-    console.error("No tokens found in process.env.TOKENS");
+    // Try to load from BOT_TOKEN_0, BOT_TOKEN_1, etc.
+    for (let i = 0; i < 10; i++) {
+        const token = process.env[`BOT_TOKEN_${i}`];
+        if (token) tokens.push(token.trim());
+    }
+}
+
+if (tokens.length === 0) {
+    console.error("No tokens found in environment variables");
     process.exit(1);
 }
 
