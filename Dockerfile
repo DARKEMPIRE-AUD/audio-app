@@ -18,5 +18,5 @@ ENV NODE_OPTIONS=--max-old-space-size=512
 # Expose port
 EXPOSE 10000
 
-# Start the app with memory limit
-CMD ["node", "index.js"]
+# Start the app
+CMD ["node", "server.js"]
