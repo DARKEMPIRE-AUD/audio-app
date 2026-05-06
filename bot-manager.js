@@ -22,9 +22,9 @@ class BotManager {
         this.audioDir = path.join(__dirname, 'uploads');
         this.dataDir = path.join(__dirname, 'data');
         
-        // Centralized stream management for performance
+        // Centralized stream management with extra buffer
         this.centralFFmpeg = null;
-        this.broadcaster = new PassThrough();
+        this.broadcaster = new PassThrough({ highWaterMark: 1024 * 512 }); // 512KB Buffer
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir);
         if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir);
