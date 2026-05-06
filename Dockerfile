@@ -5,7 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies and ffmpeg
+RUN apk add --no-cache ffmpeg
 RUN npm install --production
 
 # Copy application files
