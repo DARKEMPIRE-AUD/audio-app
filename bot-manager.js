@@ -73,7 +73,6 @@ class BotManager {
                     GatewayIntentBits.Guilds,
                     GatewayIntentBits.GuildVoiceStates,
                 ],
-                // Optimized for multiple clients in one process
                 rest: { retries: 5, timeout: 30000 }
             });
 
@@ -95,7 +94,6 @@ class BotManager {
 
             try {
                 console.log(`[Bot ${botId}] Attempting Login (30s timeout)...`);
-                // Very long timeout for Render's slow network
                 const loginPromise = client.login(this.tokens[i]);
                 const timeoutPromise = new Promise((_, reject) => 
                     setTimeout(() => reject(new Error('Login Timeout - Discord is blocking this IP')), 30000)
@@ -111,14 +109,18 @@ class BotManager {
     }
 
     setupEvents(bot) {
-        bot.client.once(Events.ClientReady, () => {
+        bot.client.on('ready', () => {
             bot.isOnline = true;
-            console.log(`[Bot ${bot.id}] ONLINE: ${bot.client.user.tag}`);
+            bot.tag = bot.client.user.tag;
+            console.log(`[Bot ${bot.id}] ONLINE: ${bot.tag}`);
             this.broadcastStatus();
-        });
-
-        bot.player.on(AudioPlayerStatus.Idle, () => {
-            if (this.globalConfig.loop && this.globalConfig.currentAudio) {
+            
+            // Rejoin if config has a VC
+            if (this.globalConfig.currentVC) {
+                this.joinVC(this.globalConfig.currentVC);
+            }
+            // Auto-play if config has audio
+            if (this.globalConfig.currentAudio) {
                 this.playAudioOnBot(bot, this.globalConfig.currentAudio);
             }
         });
@@ -150,34 +152,25 @@ class BotManager {
     async joinVC(input) {
         const channelId = input.replace(/\D/g, '');
         if (!channelId || channelId.length < 15) {
-            console.error(`[System] Invalid Channel ID: "${input}"`);
+            console.error(`[System] Invalid Channel ID provided: ${input}`);
             return;
-        }
-
-        const onlineBots = this.bots.filter(b => b.isOnline);
-        if (onlineBots.length < this.tokens.length) {
-            console.log(`[System] Waiting for all bots to come online... (${onlineBots.length}/${this.tokens.length})`);
-            // Wait up to 10 more seconds for any lagging bots
-            await new Promise(r => setTimeout(r, 5000));
         }
 
         this.globalConfig.currentVC = channelId;
         this.saveConfig();
 
         console.log(`[System] Executing Fleet Join for ${this.bots.filter(b => b.isOnline).length} online bots`);
-        
+
         for (const bot of this.bots) {
             if (!bot.isOnline) continue;
 
             try {
-                // Fetch to ensure visibility
                 const channel = await bot.client.channels.fetch(channelId);
                 if (!channel || !channel.isVoiceBased()) {
                     console.error(`[Bot ${bot.id}] Cannot see channel or not a voice channel`);
                     continue;
                 }
 
-                // Cleanup old connection if exists
                 if (bot.connection) {
                     try { bot.connection.destroy(); } catch(e) {}
                 }
@@ -190,7 +183,7 @@ class BotManager {
                     adapterCreator: channel.guild.voiceAdapterCreator,
                     selfDeaf: true,
                     selfMute: false,
-                    group: bot.client.user.id // Unique group per bot
+                    group: bot.client.user.id
                 });
 
                 bot.connection.subscribe(bot.player);
@@ -211,7 +204,6 @@ class BotManager {
                 });
 
                 this.broadcastStatus();
-                // Substantial delay to ensure Discord registers each bot
                 await new Promise(r => setTimeout(r, 4000)); 
             } catch (err) {
                 console.error(`[Bot ${bot.id}] Join Error: ${err.message}`);
@@ -245,21 +237,14 @@ class BotManager {
 
     getFFmpegFilter() {
         const filters = [];
-        
-        // 1. Extreme Bass Boost (First stage)
         if (this.globalConfig.bass > 0) {
             filters.push(`bass=g=${this.globalConfig.bass}:f=60:w=0.5`);
         }
-
-        // 2. Playback Speed
         if (this.globalConfig.speed !== 1.0) {
             filters.push(`atempo=${this.globalConfig.speed}`);
         }
-
-        // 3. Massive Volume Multiplier (Last stage)
         const volMult = this.globalConfig.volume / 100;
         filters.push(`volume=${volMult}`);
-
         return filters.length > 0 ? filters.join(',') : '';
     }
 
@@ -271,7 +256,6 @@ class BotManager {
         const filePath = path.join(this.audioDir, audioFileName);
         if (!fs.existsSync(filePath)) return;
 
-        // Atomic Stop: Kill existing FFmpeg and Player before starting new one
         if (bot.ffmpeg) {
             bot.ffmpeg.kill('SIGKILL');
             bot.ffmpeg = null;
@@ -281,16 +265,17 @@ class BotManager {
         const filterStr = this.getFFmpegFilter();
         const args = [];
         
-        // Seek to start time if provided
         if (startTime > 0) {
             args.push('-ss', startTime.toString());
         }
 
         args.push(
+            '-re',
             '-i', filePath,
             '-f', 's16le',
             '-ar', '48000',
             '-ac', '2',
+            '-threads', '1',
             'pipe:1'
         );
 
@@ -298,28 +283,17 @@ class BotManager {
             args.splice(args.indexOf(filePath) + 1, 0, '-af', filterStr);
         }
 
-        const ffmpeg = spawn('ffmpeg', args);
-        bot.ffmpeg = ffmpeg;
+        const ffmpegProcess = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'ignore'] });
+        bot.ffmpeg = ffmpegProcess;
         
-        ffmpeg.on('error', (err) => {
+        ffmpegProcess.on('error', (err) => {
             console.error(`[Bot ${bot.id}] FFmpeg Error:`, err.message);
         });
 
-        // Capture stderr for debugging
-        ffmpeg.stderr.on('data', (data) => {
-            const msg = data.toString();
-            if (msg.includes('Error')) console.error(`[Bot ${bot.id}] FFmpeg Stderr: ${msg}`);
-        });
-
-        const resource = createAudioResource(ffmpeg.stdout, {
+        const resource = createAudioResource(ffmpegProcess.stdout, {
             inputType: StreamType.Raw,
-            inlineVolume: true
+            inlineVolume: false
         });
-
-        const volMult = this.globalConfig.volume / 100;
-        if (resource.volume) {
-            resource.volume.setVolume(Math.min(volMult, 1.5)); 
-        }
 
         bot.player.play(resource);
         this.broadcastStatus();
@@ -327,12 +301,8 @@ class BotManager {
 
     seek(seconds) {
         if (!this.globalConfig.currentAudio) return;
-        
         if (!this.globalConfig.currentTime) this.globalConfig.currentTime = 0;
         this.globalConfig.currentTime = Math.max(0, this.globalConfig.currentTime + seconds);
-        
-        console.log(`[System] Seeking to ${this.globalConfig.currentTime}s`);
-        
         for (const bot of this.bots) {
             this.playAudioOnBot(bot, this.globalConfig.currentAudio, this.globalConfig.currentTime);
         }
@@ -341,8 +311,6 @@ class BotManager {
     playAll(audioFileName) {
         this.globalConfig.currentAudio = audioFileName;
         this.saveConfig();
-        
-        console.log(`[System] Starting playback on all bots: ${audioFileName}`);
         for (const bot of this.bots) {
             this.playAudioOnBot(bot, audioFileName);
         }
@@ -363,8 +331,6 @@ class BotManager {
     updateConfig(newConfig) {
         this.globalConfig = { ...this.globalConfig, ...newConfig };
         this.saveConfig();
-        
-        // Instant update for all bots
         if (this.globalConfig.currentAudio) {
             for (const bot of this.bots) {
                 this.playAudioOnBot(bot, this.globalConfig.currentAudio);
