@@ -94,16 +94,16 @@ class BotManager {
             this.bots.push(botData);
 
             try {
-                console.log(`[Bot ${botId}] Attempting Login...`);
-                // Timeout logic to prevent one stuck bot from blocking the whole fleet
+                console.log(`[Bot ${botId}] Attempting Login (30s timeout)...`);
+                // Very long timeout for Render's slow network
                 const loginPromise = client.login(this.tokens[i]);
                 const timeoutPromise = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Login Timeout - Check Discord Intents/IP')), 15000)
+                    setTimeout(() => reject(new Error('Login Timeout - Discord is blocking this IP')), 30000)
                 );
                 
                 await Promise.race([loginPromise, timeoutPromise]);
-                // Wait between logins to prevent Discord suspicious activity flags
-                await new Promise(r => setTimeout(r, 4000)); 
+                console.log(`[Bot ${botId}] Login Success!`);
+                await new Promise(r => setTimeout(r, 5000)); 
             } catch (err) {
                 console.error(`[Bot ${botId}] Login Failed: ${err.message}`);
             }
