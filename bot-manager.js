@@ -22,9 +22,8 @@ class BotManager {
         this.audioDir = path.join(__dirname, 'uploads');
         this.dataDir = path.join(__dirname, 'data');
         
-        // Centralized stream management with extra buffer
         this.centralFFmpeg = null;
-        this.broadcaster = new PassThrough({ highWaterMark: 1024 * 512 }); // 512KB Buffer
+        this.broadcaster = new PassThrough({ highWaterMark: 1024 * 512 });
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir);
         if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir);
@@ -74,6 +73,7 @@ class BotManager {
             const botId = i;
             const client = new Client({
                 intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+                makeCache: () => new Map(), // Zero-Cache Mode to save RAM
                 rest: { retries: 5, timeout: 30000 }
             });
             const player = createAudioPlayer();
@@ -85,7 +85,7 @@ class BotManager {
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000));
                 await Promise.race([loginPromise, timeoutPromise]);
                 console.log(`[Bot ${botId}] ONLINE`);
-                await new Promise(r => setTimeout(r, 4000)); 
+                await new Promise(r => setTimeout(r, 5000)); 
             } catch (err) {
                 console.error(`[Bot ${botId}] Login Failed`);
             }
@@ -154,7 +154,6 @@ class BotManager {
         return filters.length > 0 ? filters.join(',') : '';
     }
 
-    // NEW: Centralized Playback to save CPU
     playAll(audioFileName, startTime = 0) {
         const filePath = path.join(this.audioDir, audioFileName);
         if (!fs.existsSync(filePath)) return;
@@ -162,7 +161,6 @@ class BotManager {
         this.globalConfig.currentAudio = audioFileName;
         this.saveConfig();
 
-        // Kill old stream
         if (this.centralFFmpeg) {
             this.centralFFmpeg.kill('SIGKILL');
             this.centralFFmpeg = null;
@@ -171,30 +169,27 @@ class BotManager {
         const filterStr = this.getFFmpegFilter();
         const args = ['-re'];
         if (startTime > 0) args.push('-ss', startTime.toString());
-        args.push('-i', filePath, '-f', 's16le', '-ar', '48000', '-ac', '2');
+        
+        // Low Quality (32k) + Low CPU optimization
+        args.push('-i', filePath, '-f', 's16le', '-ar', '32000', '-ac', '2', '-threads', '1');
         if (filterStr) args.splice(args.indexOf(filePath) + 1, 0, '-af', filterStr);
         args.push('pipe:1');
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
-        // Broadcast the SINGLE stream to all bots
         for (const bot of this.bots) {
             if (!bot.isOnline || !bot.connection) continue;
-            
-            // Each bot gets a personal stream from the central source
             const botStream = new PassThrough();
             this.centralFFmpeg.stdout.pipe(botStream);
-            
             const resource = createAudioResource(botStream, { inputType: StreamType.Raw });
             bot.player.play(resource);
         }
 
-        console.log(`[System] One-Stream Playback started: ${audioFileName}`);
+        console.log(`[System] Optimized playback started: ${audioFileName}`);
         this.broadcastStatus();
     }
 
     playAudioOnBot(bot, audioFileName) {
-        // Not used in One-Stream mode except for initialization
         if (this.centralFFmpeg) {
             const botStream = new PassThrough();
             this.centralFFmpeg.stdout.pipe(botStream);
