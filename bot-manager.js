@@ -23,7 +23,6 @@ class BotManager {
         this.dataDir = path.join(__dirname, 'data');
         
         this.centralFFmpeg = null;
-        this.broadcaster = new PassThrough({ highWaterMark: 1024 * 512 });
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir);
         if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir);
@@ -73,7 +72,7 @@ class BotManager {
             const botId = i;
             const client = new Client({
                 intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
-                makeCache: () => new Map(), // Zero-Cache Mode to save RAM
+                makeCache: () => new Map(), 
                 rest: { retries: 5, timeout: 30000 }
             });
             const player = createAudioPlayer();
@@ -170,10 +169,22 @@ class BotManager {
         const args = ['-re'];
         if (startTime > 0) args.push('-ss', startTime.toString());
         
-        // Low Quality (32k) + Low CPU optimization
-        args.push('-i', filePath, '-f', 's16le', '-ar', '32000', '-ac', '2', '-threads', '1');
+        // ULTIMATE OPUS OPTIMIZATION:
+        // We output OGG OPUS directly from FFmpeg. 
+        // This is 48kHz (Normal Voice) and uses the LEAST CPU possible.
+        args.push(
+            '-i', filePath,
+            '-c:a', 'libopus',
+            '-b:a', '64k',
+            '-vbr', 'on',
+            '-compression_level', '10',
+            '-frame_duration', '20',
+            '-ar', '48000',
+            '-ac', '2'
+        );
+        
         if (filterStr) args.splice(args.indexOf(filePath) + 1, 0, '-af', filterStr);
-        args.push('pipe:1');
+        args.push('-f', 'opus', 'pipe:1');
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
@@ -181,11 +192,15 @@ class BotManager {
             if (!bot.isOnline || !bot.connection) continue;
             const botStream = new PassThrough();
             this.centralFFmpeg.stdout.pipe(botStream);
-            const resource = createAudioResource(botStream, { inputType: StreamType.Raw });
+            
+            // Using OggOpus input type - most efficient for Discord
+            const resource = createAudioResource(botStream, { 
+                inputType: StreamType.OggOpus 
+            });
             bot.player.play(resource);
         }
 
-        console.log(`[System] Optimized playback started: ${audioFileName}`);
+        console.log(`[System] Opus-Optimized playback started: ${audioFileName}`);
         this.broadcastStatus();
     }
 
@@ -193,7 +208,7 @@ class BotManager {
         if (this.centralFFmpeg) {
             const botStream = new PassThrough();
             this.centralFFmpeg.stdout.pipe(botStream);
-            const resource = createAudioResource(botStream, { inputType: StreamType.Raw });
+            const resource = createAudioResource(botStream, { inputType: StreamType.OggOpus });
             bot.player.play(resource);
         }
     }
