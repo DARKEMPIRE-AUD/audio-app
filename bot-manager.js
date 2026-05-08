@@ -11,6 +11,7 @@ const {
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const { PassThrough } = require('stream');
 
 class BotManager {
     constructor(io) {
@@ -21,7 +22,7 @@ class BotManager {
         this.audioDir = path.join(__dirname, 'uploads');
         this.dataDir = path.join(__dirname, 'data');
         
-        // THE MASTER ENGINE: One player for the whole fleet
+        // MASTER PLAYER: One engine for the whole fleet
         this.masterPlayer = createAudioPlayer();
         this.centralFFmpeg = null;
 
@@ -39,13 +40,6 @@ class BotManager {
         };
 
         this.loadConfig();
-        this.setupMasterEvents();
-    }
-
-    setupMasterEvents() {
-        this.masterPlayer.on('error', (err) => {
-            console.error(`[Master Player] Error:`, err.message);
-        });
     }
 
     loadTokens() {
@@ -132,10 +126,7 @@ class BotManager {
                     selfDeaf: true,
                     group: bot.client.user.id
                 });
-                
-                // ALL bots subscribe to the SAME Master Player
                 bot.connection.subscribe(this.masterPlayer);
-                
                 this.broadcastStatus();
                 await new Promise(r => setTimeout(r, 2000)); 
             } catch (err) {}
@@ -178,14 +169,13 @@ class BotManager {
         const args = ['-re'];
         if (startTime > 0) args.push('-ss', startTime.toString());
         
+        // Using RAW s16le - 100% reliable format for Discord.js
         args.push(
             '-i', filePath,
-            '-c:a', 'libopus',
-            '-b:a', '48k', // Better quality than 32k since we only have ONE stream now
-            '-vbr', 'on',
+            '-f', 's16le',
             '-ar', '48000',
             '-ac', '2',
-            '-f', 'opus',
+            '-threads', '1',
             'pipe:1'
         );
         
@@ -193,22 +183,19 @@ class BotManager {
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
-        // SMOOTH-RIDE BUFFER: 1MB shock absorber for network jitter
+        // Add a buffer for stability
         const smoothBuffer = new PassThrough({ highWaterMark: 1024 * 1024 });
         this.centralFFmpeg.stdout.pipe(smoothBuffer);
-        
+
         const resource = createAudioResource(smoothBuffer, { 
-            inputType: StreamType.OggOpus 
+            inputType: StreamType.Raw,
+            inlineVolume: false
         });
         
         this.masterPlayer.play(resource);
 
-        console.log(`[System] Master Player started: ${audioFileName}`);
+        console.log(`[System] Reliable Playback started: ${audioFileName}`);
         this.broadcastStatus();
-    }
-
-    playAudioOnBot(bot, audioFileName) {
-        // Automatically handled by subscription to masterPlayer
     }
 
     stopAll() {
