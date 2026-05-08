@@ -23,6 +23,7 @@ class BotManager {
         this.dataDir = path.join(__dirname, 'data');
         
         this.centralFFmpeg = null;
+        this.botStreams = new Map(); // Track streams for each bot
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir);
         if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir);
@@ -165,14 +166,13 @@ class BotManager {
             this.centralFFmpeg = null;
         }
 
+        // Clean up old bot streams
+        this.botStreams.clear();
+
         const filterStr = this.getFFmpegFilter();
         const args = ['-re'];
         if (startTime > 0) args.push('-ss', startTime.toString());
         
-        // ULTIMATE OPUS OPTIMIZATION:
-        // We output OGG OPUS directly from FFmpeg. 
-        // This is 48kHz (Normal Voice) and uses the LEAST CPU possible.
-        // FINAL EMERGENCY OPTIMIZATION: 32k Bitrate + Low Buffer Delay
         args.push(
             '-i', filePath,
             '-c:a', 'libopus',
@@ -181,34 +181,49 @@ class BotManager {
             '-compression_level', '5',
             '-frame_duration', '40',
             '-ar', '48000',
-            '-ac', '2'
+            '-ac', '2',
+            '-f', 'opus',
+            'pipe:1'
         );
         
         if (filterStr) args.splice(args.indexOf(filePath) + 1, 0, '-af', filterStr);
-        args.push('-f', 'opus', 'pipe:1');
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
+        // MASTER MULTIPLEXER: Send chunks to every bot individually
+        this.centralFFmpeg.stdout.on('data', (chunk) => {
+            for (const stream of this.botStreams.values()) {
+                stream.write(chunk);
+            }
+        });
+
+        this.centralFFmpeg.on('exit', () => {
+            for (const stream of this.botStreams.values()) {
+                stream.end();
+            }
+            this.botStreams.clear();
+        });
+
         for (const bot of this.bots) {
             if (!bot.isOnline || !bot.connection) continue;
-            const botStream = new PassThrough();
-            this.centralFFmpeg.stdout.pipe(botStream);
             
-            // Using OggOpus input type - most efficient for Discord
+            const botStream = new PassThrough();
+            this.botStreams.set(bot.id, botStream);
+            
             const resource = createAudioResource(botStream, { 
                 inputType: StreamType.OggOpus 
             });
             bot.player.play(resource);
         }
 
-        console.log(`[System] Opus-Optimized playback started: ${audioFileName}`);
+        console.log(`[System] Multiplexed Playback started: ${audioFileName}`);
         this.broadcastStatus();
     }
 
     playAudioOnBot(bot, audioFileName) {
-        if (this.centralFFmpeg) {
+        if (this.centralFFmpeg && bot.isOnline && bot.connection) {
             const botStream = new PassThrough();
-            this.centralFFmpeg.stdout.pipe(botStream);
+            this.botStreams.set(bot.id, botStream);
             const resource = createAudioResource(botStream, { inputType: StreamType.OggOpus });
             bot.player.play(resource);
         }
@@ -220,6 +235,7 @@ class BotManager {
             this.centralFFmpeg.kill();
             this.centralFFmpeg = null;
         }
+        this.botStreams.clear();
         for (const bot of this.bots) bot.player.stop();
         this.broadcastStatus();
     }
