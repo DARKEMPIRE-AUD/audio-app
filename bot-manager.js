@@ -74,7 +74,11 @@ class BotManager {
             const botId = i;
             const client = new Client({
                 intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
-                makeCache: () => new Map(), 
+                // Professional way to limit cache and save RAM
+                makeCache: () => new Map(),
+                sweepers: {
+                    messages: { interval: 300, lifetime: 600 }
+                },
                 rest: { retries: 5, timeout: 30000 }
             });
             const botData = { id: botId, client, connection: null, isOnline: false };
@@ -84,8 +88,11 @@ class BotManager {
                 const loginPromise = client.login(this.tokens[i]);
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000));
                 await Promise.race([loginPromise, timeoutPromise]);
-                console.log(`[Bot ${botId}] ONLINE`);
-                await new Promise(r => setTimeout(r, 4000)); 
+                // Replaced 'ready' with 'Events.ClientReady' as per warning
+                client.once(Events.ClientReady, () => {
+                    console.log(`[Bot ${botId}] ONLINE`);
+                });
+                await new Promise(r => setTimeout(r, 5000)); 
             } catch (err) {
                 console.error(`[Bot ${botId}] Login Failed`);
             }
@@ -166,7 +173,7 @@ class BotManager {
         this.masterPlayer.stop(true);
 
         const filterStr = this.getFFmpegFilter();
-        const args = ['-re'];
+        const args = []; // Removed -re for better buffering on slow CPUs
         if (startTime > 0) args.push('-ss', startTime.toString());
         
         // Using RAW s16le - 100% reliable format for Discord.js
@@ -183,8 +190,8 @@ class BotManager {
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
-        // Add a buffer for stability
-        const smoothBuffer = new PassThrough({ highWaterMark: 1024 * 1024 });
+        // HUGE 2MB Smooth-Ride Buffer
+        const smoothBuffer = new PassThrough({ highWaterMark: 1024 * 1024 * 2 });
         this.centralFFmpeg.stdout.pipe(smoothBuffer);
 
         const resource = createAudioResource(smoothBuffer, { 

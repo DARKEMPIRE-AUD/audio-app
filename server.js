@@ -6,6 +6,15 @@ const fileUpload = require('express-fileupload');
 const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
+
+// GLOBAL ERROR SHIELD: Prevent server from crashing on network glitches
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[System] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[System] Uncaught Exception:', err);
+});
+
 const BotManager = require('./bot-manager');
 
 const app = express();
