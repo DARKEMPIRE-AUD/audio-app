@@ -11,7 +11,6 @@ const {
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
-const { PassThrough } = require('stream');
 
 class BotManager {
     constructor(io) {
@@ -22,8 +21,9 @@ class BotManager {
         this.audioDir = path.join(__dirname, 'uploads');
         this.dataDir = path.join(__dirname, 'data');
         
+        // THE MASTER ENGINE: One player for the whole fleet
+        this.masterPlayer = createAudioPlayer();
         this.centralFFmpeg = null;
-        this.botStreams = new Map(); // Track streams for each bot
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir);
         if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir);
@@ -39,6 +39,13 @@ class BotManager {
         };
 
         this.loadConfig();
+        this.setupMasterEvents();
+    }
+
+    setupMasterEvents() {
+        this.masterPlayer.on('error', (err) => {
+            console.error(`[Master Player] Error:`, err.message);
+        });
     }
 
     loadTokens() {
@@ -76,8 +83,7 @@ class BotManager {
                 makeCache: () => new Map(), 
                 rest: { retries: 5, timeout: 30000 }
             });
-            const player = createAudioPlayer();
-            const botData = { id: botId, client, player, connection: null, isOnline: false };
+            const botData = { id: botId, client, connection: null, isOnline: false };
             this.setupEvents(botData);
             this.bots.push(botData);
             try {
@@ -85,7 +91,7 @@ class BotManager {
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000));
                 await Promise.race([loginPromise, timeoutPromise]);
                 console.log(`[Bot ${botId}] ONLINE`);
-                await new Promise(r => setTimeout(r, 5000)); 
+                await new Promise(r => setTimeout(r, 4000)); 
             } catch (err) {
                 console.error(`[Bot ${botId}] Login Failed`);
             }
@@ -96,9 +102,7 @@ class BotManager {
         bot.client.on('ready', () => {
             bot.isOnline = true;
             this.broadcastStatus();
-            if (this.globalConfig.currentAudio) this.playAudioOnBot(bot, this.globalConfig.currentAudio);
         });
-        bot.player.on('error', (err) => console.error(`[Bot ${bot.id}] Player Error`));
     }
 
     broadcastStatus() {
@@ -107,7 +111,7 @@ class BotManager {
             tag: b.client.user?.tag || 'Connecting...',
             isOnline: b.isOnline,
             isJoined: !!b.connection && b.connection.state.status !== VoiceConnectionStatus.Destroyed,
-            status: b.player.state.status
+            status: this.masterPlayer.state.status
         }));
         this.io.emit('botStatus', { bots: stats, config: this.globalConfig });
     }
@@ -128,9 +132,12 @@ class BotManager {
                     selfDeaf: true,
                     group: bot.client.user.id
                 });
-                bot.connection.subscribe(bot.player);
+                
+                // ALL bots subscribe to the SAME Master Player
+                bot.connection.subscribe(this.masterPlayer);
+                
                 this.broadcastStatus();
-                await new Promise(r => setTimeout(r, 3000)); 
+                await new Promise(r => setTimeout(r, 2000)); 
             } catch (err) {}
         }
     }
@@ -165,9 +172,7 @@ class BotManager {
             this.centralFFmpeg.kill('SIGKILL');
             this.centralFFmpeg = null;
         }
-
-        // Clean up old bot streams
-        this.botStreams.clear();
+        this.masterPlayer.stop(true);
 
         const filterStr = this.getFFmpegFilter();
         const args = ['-re'];
@@ -176,10 +181,8 @@ class BotManager {
         args.push(
             '-i', filePath,
             '-c:a', 'libopus',
-            '-b:a', '32k',
+            '-b:a', '48k', // Better quality than 32k since we only have ONE stream now
             '-vbr', 'on',
-            '-compression_level', '5',
-            '-frame_duration', '40',
             '-ar', '48000',
             '-ac', '2',
             '-f', 'opus',
@@ -190,43 +193,19 @@ class BotManager {
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
-        // MASTER MULTIPLEXER: Send chunks to every bot individually
-        this.centralFFmpeg.stdout.on('data', (chunk) => {
-            for (const stream of this.botStreams.values()) {
-                stream.write(chunk);
-            }
+        // Just play the one stream on the one player!
+        const resource = createAudioResource(this.centralFFmpeg.stdout, { 
+            inputType: StreamType.OggOpus 
         });
+        
+        this.masterPlayer.play(resource);
 
-        this.centralFFmpeg.on('exit', () => {
-            for (const stream of this.botStreams.values()) {
-                stream.end();
-            }
-            this.botStreams.clear();
-        });
-
-        for (const bot of this.bots) {
-            if (!bot.isOnline || !bot.connection) continue;
-            
-            const botStream = new PassThrough();
-            this.botStreams.set(bot.id, botStream);
-            
-            const resource = createAudioResource(botStream, { 
-                inputType: StreamType.OggOpus 
-            });
-            bot.player.play(resource);
-        }
-
-        console.log(`[System] Multiplexed Playback started: ${audioFileName}`);
+        console.log(`[System] Master Player started: ${audioFileName}`);
         this.broadcastStatus();
     }
 
     playAudioOnBot(bot, audioFileName) {
-        if (this.centralFFmpeg && bot.isOnline && bot.connection) {
-            const botStream = new PassThrough();
-            this.botStreams.set(bot.id, botStream);
-            const resource = createAudioResource(botStream, { inputType: StreamType.OggOpus });
-            bot.player.play(resource);
-        }
+        // Automatically handled by subscription to masterPlayer
     }
 
     stopAll() {
@@ -235,8 +214,7 @@ class BotManager {
             this.centralFFmpeg.kill();
             this.centralFFmpeg = null;
         }
-        this.botStreams.clear();
-        for (const bot of this.bots) bot.player.stop();
+        this.masterPlayer.stop();
         this.broadcastStatus();
     }
 
