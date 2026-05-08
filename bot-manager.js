@@ -172,13 +172,14 @@ class BotManager {
         // ULTIMATE OPUS OPTIMIZATION:
         // We output OGG OPUS directly from FFmpeg. 
         // This is 48kHz (Normal Voice) and uses the LEAST CPU possible.
+        // FINAL EMERGENCY OPTIMIZATION: 32k Bitrate + Low Buffer Delay
         args.push(
             '-i', filePath,
             '-c:a', 'libopus',
-            '-b:a', '64k',
+            '-b:a', '32k',
             '-vbr', 'on',
-            '-compression_level', '10',
-            '-frame_duration', '20',
+            '-compression_level', '5',
+            '-frame_duration', '40',
             '-ar', '48000',
             '-ac', '2'
         );
