@@ -193,8 +193,11 @@ class BotManager {
 
         this.centralFFmpeg = spawn('ffmpeg', args);
         
-        // Just play the one stream on the one player!
-        const resource = createAudioResource(this.centralFFmpeg.stdout, { 
+        // SMOOTH-RIDE BUFFER: 1MB shock absorber for network jitter
+        const smoothBuffer = new PassThrough({ highWaterMark: 1024 * 1024 });
+        this.centralFFmpeg.stdout.pipe(smoothBuffer);
+        
+        const resource = createAudioResource(smoothBuffer, { 
             inputType: StreamType.OggOpus 
         });
         
